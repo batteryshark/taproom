@@ -3,6 +3,7 @@
   "version": "0.1.0",
   "private": true,
   "description": "Local installer for capabilities exposed by Taproom",
+  "license": "MIT",
   "type": "module",
   "bin": {
     "taproom": "bin/taproom.mjs"
@@ -14,4 +15,3 @@
     "node": ">=20"
   }
 }
-

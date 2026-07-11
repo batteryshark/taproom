@@ -7,6 +7,7 @@ name = "taproom"
 version = "0.1.0"
 description = "Discover and retrieve portable agent skills and MCP servers."
 readme = "README.md"
+license = "MIT"
 requires-python = ">=3.11"
 dependencies = [
   "fastmcp>=3.4,<3.5",

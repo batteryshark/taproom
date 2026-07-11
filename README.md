@@ -129,3 +129,7 @@ indexes tools rather than resources.
 uv run python -m unittest discover -s tests
 npm test
 ```
+
+## License
+
+MIT. See [LICENSE](LICENSE).
