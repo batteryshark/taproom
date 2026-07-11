@@ -1,7 +1,11 @@
+.DS_Store
+.env
+.env.*
 .venv/
 __pycache__/
 *.pyc
 .pytest_cache/
 node_modules/
+dist/
 .taproom.lock
-
+taproom.toml

@@ -19,6 +19,14 @@ class Catalog:
     def __init__(self, capabilities: Iterable[Capability]):
         self.capabilities = list(capabilities)
         self.by_id = {capability.id: capability for capability in self.capabilities}
+        if len(self.by_id) != len(self.capabilities):
+            seen: set[str] = set()
+            duplicates: set[str] = set()
+            for capability in self.capabilities:
+                if capability.id in seen:
+                    duplicates.add(capability.id)
+                seen.add(capability.id)
+            raise ValueError(f"Duplicate capability IDs: {', '.join(duplicates)}")
         self.documents = [
             tokenize(
                 " ".join(
@@ -28,6 +36,7 @@ class Catalog:
                         item.category,
                         " ".join(item.tags),
                         item.kind,
+                        item.tap,
                         item.source,
                     )
                 )
@@ -38,14 +47,21 @@ class Catalog:
     def get(self, capability_id: str) -> Capability | None:
         return self.by_id.get(capability_id)
 
-    def search(self, query: str, *, kind: str | None = None, limit: int = 5) -> list[dict]:
+    def search(
+        self,
+        query: str,
+        *,
+        kind: str | None = None,
+        tap: str | None = None,
+        limit: int = 5,
+    ) -> list[dict]:
         terms = tokenize(query)
         if not terms or limit < 1:
             return []
         eligible = [
             index
             for index, item in enumerate(self.capabilities)
-            if kind is None or item.kind == kind
+            if (kind is None or item.kind == kind) and (tap is None or item.tap == tap)
         ]
         if not eligible:
             return []
@@ -76,4 +92,3 @@ class Catalog:
             {**self.capabilities[index].to_dict(), "score": round(score, 6)}
             for score, index in scores[: min(limit, 25)]
         ]
-

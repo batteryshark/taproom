@@ -6,6 +6,7 @@ build-backend = "hatchling.build"
 name = "taproom"
 version = "0.1.0"
 description = "Discover and retrieve portable agent skills and MCP servers."
+readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
   "fastmcp>=3.4,<3.5",
@@ -14,6 +15,10 @@ dependencies = [
 [project.scripts]
 taproom-server = "taproom.server:main"
 
+[project.urls]
+Homepage = "https://github.com/batteryshark/taproom"
+Repository = "https://github.com/batteryshark/taproom"
+Issues = "https://github.com/batteryshark/taproom/issues"
+
 [tool.hatch.build.targets.wheel]
 packages = ["src/taproom"]
-

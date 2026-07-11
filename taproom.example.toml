@@ -1,0 +1,45 @@
+version = 1
+
+[[taps]]
+name = "public"
+visibility = "public"
+
+[[taps.sources]]
+name = "skilltap"
+kind = "skill"
+path = "../skill-tap/skills"
+
+[[taps.sources]]
+name = "mcptap"
+kind = "mcp"
+path = "../mcp-tap/servers"
+
+[[taps.sources]]
+name = "rekit"
+kind = "skill"
+path = "../../reverse-engineering-tools/rekit/skills"
+
+[[taps]]
+name = "private"
+visibility = "private"
+enabled = false
+
+[[taps.sources]]
+name = "skilltap"
+kind = "skill"
+path = "../skill-tap-private/skills"
+
+[[taps.sources]]
+name = "mcptap"
+kind = "mcp"
+path = "../mcp-tap-private/servers"
+
+[[taps.sources]]
+name = "rekit"
+kind = "skill"
+path = "../../reverse-engineering-tools/rekit-private/skills"
+
+[[taps.sources]]
+name = "rekit"
+kind = "mcp"
+path = "../../reverse-engineering-tools/rekit-private/mcp-servers"

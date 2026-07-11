@@ -1,18 +1,20 @@
 #!/usr/bin/env node
 
 import { createHash } from "node:crypto";
-import { chmod, mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
+import { chmod, mkdir, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
-import { basename, dirname, join, resolve, sep } from "node:path";
+import { dirname, join, resolve, sep } from "node:path";
 import process from "node:process";
+import { fileURLToPath } from "node:url";
 
 const DEFAULT_SERVER = process.env.TAPROOM_URL ?? "http://127.0.0.1:8768";
 
 function usage() {
   return `Usage:
-  taproom search <query> [--kind skill|mcp] [--server URL]
-  taproom info <source:kind:name> [--server URL]
-  taproom add <source:skill:name> (--project [DIR] | --global) [--server URL] [--force]
+  taproom taps [--server URL]
+  taproom search <query> [--kind skill|mcp] [--tap NAME] [--server URL]
+  taproom info <tap:kind:locator> [--server URL]
+  taproom add <tap:skill:locator> (--project [DIR] | --global) [--server URL] [--force]
 
 Environment:
   TAPROOM_URL        Taproom HTTP origin (default: ${DEFAULT_SERVER})
@@ -47,7 +49,7 @@ function parse(argv) {
 function capabilityParts(id) {
   const parts = id.split(":");
   if (parts.length !== 3 || !parts.every(Boolean)) {
-    throw new Error("capability ID must be source:kind:name");
+    throw new Error("capability ID must be tap:kind:locator");
   }
   return parts;
 }
@@ -78,48 +80,61 @@ async function search(options) {
   const url = endpoint(options.server ?? DEFAULT_SERVER, "/api/v1/search");
   url.searchParams.set("q", query);
   if (options.kind) url.searchParams.set("kind", options.kind);
+  if (options.tap) url.searchParams.set("tap", options.tap);
   const payload = await getJson(url);
   for (const item of payload.results) {
     console.log(`${item.id}\n  ${item.description}`);
   }
 }
 
+async function taps(options) {
+  const payload = await getJson(endpoint(options.server ?? DEFAULT_SERVER, "/api/v1/taps"));
+  for (const tap of payload.taps) {
+    console.log(`${tap.name} (${tap.visibility}) — ${tap.skills} skills, ${tap.mcp_servers} MCP servers`);
+    for (const source of tap.sources) console.log(`  ${source.kind}: ${source.name}`);
+  }
+}
+
 async function info(options) {
   const id = options.positionals[1];
-  const [source, kind, name] = capabilityParts(id ?? "");
-  const url = endpoint(options.server ?? DEFAULT_SERVER, `/api/v1/capabilities/${encodeURIComponent(source)}/${kind}/${encodeURIComponent(name)}`);
+  const [tap, kind, locator] = capabilityParts(id ?? "");
+  const url = endpoint(options.server ?? DEFAULT_SERVER, `/api/v1/capabilities/${encodeURIComponent(tap)}/${kind}/${encodeURIComponent(locator)}`);
   console.log(JSON.stringify(await getJson(url), null, 2));
 }
 
 async function add(options) {
   const id = options.positionals[1];
-  const [source, kind, name] = capabilityParts(id ?? "");
+  const [tap, kind, locator] = capabilityParts(id ?? "");
   if (kind !== "skill") throw new Error("automatic MCP installation is not enabled yet");
   if (Boolean(options.project) === Boolean(options.global)) {
     throw new Error("choose exactly one of --project or --global");
   }
+  const server = options.server ?? DEFAULT_SERVER;
+  const manifestUrl = endpoint(server, `/api/v1/capabilities/${encodeURIComponent(tap)}/skill/${encodeURIComponent(locator)}`);
+  const manifest = await getJson(manifestUrl);
+  const name = manifest.capability.name;
   const skillRoot = options.global
     ? resolve(process.env.TAPROOM_SKILL_HOME ?? join(homedir(), ".agents", "skills"))
     : resolve(options.project, ".agents", "skills");
   const destination = join(skillRoot, name);
   const temporary = `${destination}.taproom-${process.pid}`;
-  const server = options.server ?? DEFAULT_SERVER;
-  const manifestUrl = endpoint(server, `/api/v1/capabilities/${encodeURIComponent(source)}/skill/${encodeURIComponent(name)}`);
-  const manifest = await getJson(manifestUrl);
 
+  let destinationExists = false;
   try {
-    await readFile(join(destination, "SKILL.md"));
-    if (!options.force) throw new Error(`${destination} already exists; pass --force to replace it`);
+    await stat(destination);
+    destinationExists = true;
   } catch (error) {
-    if (error.code !== "ENOENT" && !String(error.message).includes("already exists")) throw error;
-    if (String(error.message).includes("already exists")) throw error;
+    if (error.code !== "ENOENT") throw error;
+  }
+  if (destinationExists && !options.force) {
+    throw new Error(`${destination} already exists; pass --force to replace it`);
   }
 
   await rm(temporary, { recursive: true, force: true });
   try {
     for (const file of manifest.files) {
       const target = safeDestination(temporary, file.path);
-      const fileUrl = endpoint(server, `/api/v1/skills/${encodeURIComponent(source)}/${encodeURIComponent(name)}/files/${file.path.split("/").map(encodeURIComponent).join("/")}`);
+      const fileUrl = endpoint(server, `/api/v1/skills/${encodeURIComponent(tap)}/${encodeURIComponent(locator)}/files/${file.path.split("/").map(encodeURIComponent).join("/")}`);
       const response = await fetch(fileUrl);
       if (!response.ok) throw new Error(`failed to download ${file.path}: ${response.status}`);
       const bytes = Buffer.from(await response.arrayBuffer());
@@ -152,13 +167,14 @@ export async function main(argv = process.argv.slice(2)) {
     console.log(usage());
     return;
   }
+  if (command === "taps") return taps(options);
   if (command === "search") return search(options);
   if (command === "info") return info(options);
   if (command === "add") return add(options);
   throw new Error(`unknown command: ${command}\n\n${usage()}`);
 }
 
-if (process.argv[1] && basename(process.argv[1]) === basename(import.meta.filename)) {
+if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
   main().catch((error) => {
     console.error(`taproom: ${error.message}`);
     process.exitCode = 1;

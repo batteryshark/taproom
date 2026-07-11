@@ -6,13 +6,30 @@ from typing import Any, Literal
 
 
 CapabilityKind = Literal["skill", "mcp"]
+TapVisibility = Literal["public", "private"]
+
+
+@dataclass(frozen=True)
+class TapSource:
+    name: str
+    kind: CapabilityKind
+    path: Path
+
+
+@dataclass(frozen=True)
+class Tap:
+    name: str
+    visibility: TapVisibility
+    sources: tuple[TapSource, ...]
 
 
 @dataclass(frozen=True)
 class Capability:
     id: str
     kind: CapabilityKind
+    tap: str
     source: str
+    locator: str
     name: str
     description: str
     path: Path
@@ -29,4 +46,3 @@ class Capability:
         else:
             value.pop("path")
         return value
-
