@@ -85,6 +85,20 @@ class CatalogTests(unittest.TestCase):
             self.assertEqual(plan["detected_dependencies"]["python"], ["fastmcp==3.4.4"])
             self.assertEqual(plan["unresolved"], [])
 
+    def test_invalid_mcp_requirements_block_activation(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            server = root / "debug" / "broken"
+            server.mkdir(parents=True)
+            (server / "server.json").write_text(
+                '{"name":"broken","description":"Broken requirements fixture.","launch":{"command":"uv","args":[]},"requirements":{"platforms":["plan9"],"commands":[{}]}}',
+                encoding="utf-8",
+            )
+            capability = load_mcp_servers([("public", "fixture", root)])[0]
+            plan = package_manifest(capability)["plan"]
+            self.assertFalse(plan["requirements_declared"])
+            self.assertEqual(len(plan["unresolved"]), 2)
+
     def test_config_loads_multiple_named_taps_and_sources(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

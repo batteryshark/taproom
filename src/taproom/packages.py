@@ -66,9 +66,9 @@ def package_file_allowed(root: Path, path: Path) -> bool:
 
 def _mcp_plan(capability: Capability) -> dict:
     manifest = capability.metadata
-    declared = isinstance(manifest.get("requirements"), dict)
-    unresolved = []
-    if not declared:
+    requirements, errors = _requirements(manifest.get("requirements"))
+    unresolved = list(errors)
+    if manifest.get("requirements") is None:
         unresolved.append(
             "server.json has no structured requirements; review README and package files before activation"
         )
@@ -80,11 +80,35 @@ def _mcp_plan(capability: Capability) -> dict:
         "launch": manifest.get("launch"),
         "auth": manifest.get("auth"),
         "env": manifest.get("env", []),
-        "requirements_declared": declared,
-        "requirements": manifest.get("requirements", {}),
+        "requirements_declared": manifest.get("requirements") is not None and not errors,
+        "requirements": requirements,
         "detected_dependencies": _dependencies(capability.path),
         "unresolved": unresolved,
     }
+
+
+def _requirements(value: object) -> tuple[dict, list[str]]:
+    if value is None:
+        return {}, []
+    if not isinstance(value, dict):
+        return {}, ["server.json requirements must be an object"]
+    errors = []
+    platforms = value.get("platforms", [])
+    if not isinstance(platforms, list) or not all(
+        platform in {"any", "linux", "macos", "windows"} for platform in platforms
+    ):
+        errors.append("requirements.platforms must contain only any, linux, macos, or windows")
+    for field in ("commands", "software"):
+        items = value.get(field, [])
+        if not isinstance(items, list) or not all(
+            isinstance(item, str) or isinstance(item, dict) and isinstance(item.get("name"), str)
+            for item in items
+        ):
+            errors.append(f"requirements.{field} entries need a name")
+    setup = value.get("setup", [])
+    if not isinstance(setup, list) or not all(isinstance(item, str) for item in setup):
+        errors.append("requirements.setup must be a list of strings")
+    return value, errors
 
 
 def _dependencies(root: Path) -> dict:
