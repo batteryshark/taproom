@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "taproom"
-version = "0.1.0"
+version = "0.2.0"
 description = "Discover and retrieve portable agent skills and MCP servers."
 readme = "README.md"
 license = "MIT"

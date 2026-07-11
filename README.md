@@ -18,9 +18,9 @@ collections are never loaded implicitly.
   manifest, and supporting files for every indexed skill.
 - A small MJS CLI performs local filesystem changes, verifies SHA-256 hashes,
   and records installed files in `.taproom.lock`.
-- MCP servers are searchable and inspectable. Automatic MCP configuration is
-  intentionally deferred until client-specific changes and execution consent
-  have a clear contract.
+- MCP packages are searchable, inspectable, hash-verifiable, and fetchable.
+  Automatic activation requires declared host requirements and a passing local
+  doctor check.
 
 ## Quickstart
 
@@ -102,6 +102,54 @@ node bin/taproom.mjs add public:skill:skilltap~development~codebase-archeology -
 Capability IDs use `tap:kind:source~path`, so identical skill names from
 different taps, sources, or categories remain independently addressable.
 
+## MCP packages
+
+Inspect requirements before fetching or activating a server:
+
+```sh
+node bin/taproom.mjs plan public:mcp:mcptap~travel~sandals
+node bin/taproom.mjs doctor public:mcp:mcptap~travel~sandals
+node bin/taproom.mjs fetch public:mcp:mcptap~travel~sandals --project .
+node bin/taproom.mjs configure public:mcp:mcptap~travel~sandals --project . --client codex
+```
+
+`plan` reports runtime, transport, launch configuration, required environment,
+declared host requirements, detected Python or Node dependencies, lockfiles,
+and unresolved setup. `fetch` downloads the complete package and verifies every
+file hash without installing system dependencies. `doctor` checks the current
+platform, commands, and required environment variables. `configure` prints a
+reviewable client configuration; it does not modify client settings.
+
+`add` combines doctor and fetch. It refuses MCP activation when requirements
+are incomplete or the local checks fail. An explicit `fetch` remains available
+after the operator reviews those warnings.
+
+For dependency-aware activation, an MCP package's `server.json` declares host
+requirements alongside its existing runtime, launch, and environment fields:
+
+```json
+{
+  "requirements": {
+    "platforms": ["windows"],
+    "commands": [
+      {"name": "uv", "version": ">=0.10"}
+    ],
+    "software": [
+      {"name": "x64dbg", "version": "2026.05.27"}
+    ],
+    "setup": [
+      "Copy the matching plugin into the x64dbg or x32dbg plugin directory."
+    ]
+  }
+}
+```
+
+Supported platform values are `any`, `linux`, `macos`, and `windows`.
+`commands` are checked on `PATH`; `software` and `setup` are presented as
+manual verification items. If `requirements` is absent, Taproom reports the
+manifest as incomplete and points the operator to the included README and
+dependency files.
+
 Project installs go to `<project>/.agents/skills/`. Global installs default to
 `~/.agents/skills/`; set `TAPROOM_SKILL_HOME` to target another agent's skill
 directory. Existing skills are never replaced unless `--force` is supplied.
@@ -111,6 +159,7 @@ directory. Existing skills are never replaced unless `--force` is supplied.
 - `list_taps()`
 - `search_capabilities(query, kind?, tap?, limit?)`
 - `inspect_capability(capability_id)`
+- `plan_mcp_server(capability_id)`
 
 Skills are also available through FastMCP's standard skill resources. Search
 is implemented over capability metadata because FastMCP's BM25 search transform
@@ -119,6 +168,7 @@ indexes tools rather than resources.
 ## Repository map
 
 - `src/taproom/` contains catalog discovery, ranking, and the FastMCP service.
+- `src/taproom/packages.py` builds file manifests and MCP dependency plans.
 - `bin/taproom.mjs` is the dependency-free local installer.
 - `tests/` covers catalog identity, manifests, search, and CLI installation.
 - `assets/` contains the project artwork.

@@ -1,9 +1,10 @@
 #!/usr/bin/env node
 
 import { createHash } from "node:crypto";
-import { chmod, mkdir, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
+import { constants } from "node:fs";
+import { access, chmod, mkdir, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
-import { dirname, join, resolve, sep } from "node:path";
+import { delimiter, dirname, join, resolve, sep } from "node:path";
 import process from "node:process";
 import { fileURLToPath } from "node:url";
 
@@ -14,11 +15,16 @@ function usage() {
   taproom taps [--server URL]
   taproom search <query> [--kind skill|mcp] [--tap NAME] [--server URL]
   taproom info <tap:kind:locator> [--server URL]
-  taproom add <tap:skill:locator> (--project [DIR] | --global) [--server URL] [--force]
+  taproom plan <tap:mcp:locator> [--server URL]
+  taproom doctor <tap:mcp:locator> [--server URL]
+  taproom fetch <tap:mcp:locator> (--project [DIR] | --global) [--force]
+  taproom configure <tap:mcp:locator> (--project [DIR] | --global) [--client codex|json]
+  taproom add <tap:kind:locator> (--project [DIR] | --global) [--server URL] [--force]
 
 Environment:
   TAPROOM_URL        Taproom HTTP origin (default: ${DEFAULT_SERVER})
-  TAPROOM_SKILL_HOME Override the global skill directory (default: ~/.agents/skills)`;
+  TAPROOM_SKILL_HOME Override the global skill directory (default: ~/.agents/skills)
+  TAPROOM_MCP_HOME   Override the global MCP package directory (default: ~/.taproom/mcp)`;
 }
 
 function parse(argv) {
@@ -96,27 +102,50 @@ async function taps(options) {
 }
 
 async function info(options) {
-  const id = options.positionals[1];
-  const [tap, kind, locator] = capabilityParts(id ?? "");
-  const url = endpoint(options.server ?? DEFAULT_SERVER, `/api/v1/capabilities/${encodeURIComponent(tap)}/${kind}/${encodeURIComponent(locator)}`);
-  console.log(JSON.stringify(await getJson(url), null, 2));
+  console.log(JSON.stringify(await getCapability(options), null, 2));
 }
 
-async function add(options) {
+async function getCapability(options) {
   const id = options.positionals[1];
   const [tap, kind, locator] = capabilityParts(id ?? "");
-  if (kind !== "skill") throw new Error("automatic MCP installation is not enabled yet");
+  const server = options.server ?? DEFAULT_SERVER;
+  const url = endpoint(server, `/api/v1/capabilities/${encodeURIComponent(tap)}/${kind}/${encodeURIComponent(locator)}`);
+  return getJson(url);
+}
+
+function requireScope(options) {
   if (Boolean(options.project) === Boolean(options.global)) {
     throw new Error("choose exactly one of --project or --global");
   }
-  const server = options.server ?? DEFAULT_SERVER;
-  const manifestUrl = endpoint(server, `/api/v1/capabilities/${encodeURIComponent(tap)}/skill/${encodeURIComponent(locator)}`);
-  const manifest = await getJson(manifestUrl);
-  const name = manifest.capability.name;
-  const skillRoot = options.global
-    ? resolve(process.env.TAPROOM_SKILL_HOME ?? join(homedir(), ".agents", "skills"))
-    : resolve(options.project, ".agents", "skills");
-  const destination = join(skillRoot, name);
+}
+
+function installLocation(options, manifest) {
+  requireScope(options);
+  const { kind, name, tap } = manifest.capability;
+  if (kind === "skill") {
+    const root = options.global
+      ? resolve(process.env.TAPROOM_SKILL_HOME ?? join(homedir(), ".agents", "skills"))
+      : resolve(options.project, ".agents", "skills");
+    return {
+      destination: join(root, name),
+      lockPath: options.global ? join(root, ".taproom.lock") : join(resolve(options.project), ".taproom.lock"),
+      lockGroup: "skills",
+    };
+  }
+  const root = options.global
+    ? resolve(process.env.TAPROOM_MCP_HOME ?? join(homedir(), ".taproom", "mcp"))
+    : resolve(options.project, ".taproom", "mcp");
+  return {
+    destination: join(root, tap, name),
+    lockPath: options.global ? join(root, ".taproom.lock") : join(resolve(options.project), ".taproom.lock"),
+    lockGroup: "mcp_servers",
+  };
+}
+
+async function downloadPackage(options, manifest) {
+  const id = manifest.capability.id;
+  const { tap, kind, locator } = manifest.capability;
+  const { destination, lockPath, lockGroup } = installLocation(options, manifest);
   const temporary = `${destination}.taproom-${process.pid}`;
 
   let destinationExists = false;
@@ -134,7 +163,7 @@ async function add(options) {
   try {
     for (const file of manifest.files) {
       const target = safeDestination(temporary, file.path);
-      const fileUrl = endpoint(server, `/api/v1/skills/${encodeURIComponent(tap)}/${encodeURIComponent(locator)}/files/${file.path.split("/").map(encodeURIComponent).join("/")}`);
+      const fileUrl = endpoint(options.server ?? DEFAULT_SERVER, `/api/v1/packages/${encodeURIComponent(tap)}/${kind}/${encodeURIComponent(locator)}/files/${file.path.split("/").map(encodeURIComponent).join("/")}`);
       const response = await fetch(fileUrl);
       if (!response.ok) throw new Error(`failed to download ${file.path}: ${response.status}`);
       const bytes = Buffer.from(await response.arrayBuffer());
@@ -152,12 +181,125 @@ async function add(options) {
     throw error;
   }
 
-  const lockPath = options.global ? join(skillRoot, ".taproom.lock") : join(resolve(options.project), ".taproom.lock");
-  let lock = { version: 1, skills: {} };
+  let lock = { version: 1, skills: {}, mcp_servers: {} };
   try { lock = JSON.parse(await readFile(lockPath, "utf8")); } catch (error) { if (error.code !== "ENOENT") throw error; }
-  lock.skills[id] = { installedAt: new Date().toISOString(), path: destination, files: manifest.files.map(({ path, hash }) => ({ path, hash })) };
+  lock[lockGroup] ??= {};
+  lock[lockGroup][id] = { installedAt: new Date().toISOString(), path: destination, files: manifest.files.map(({ path, hash }) => ({ path, hash })) };
+  await mkdir(dirname(lockPath), { recursive: true });
   await writeFile(lockPath, `${JSON.stringify(lock, null, 2)}\n`);
   console.log(`Installed ${id} to ${destination}`);
+  return destination;
+}
+
+function printPlan(manifest) {
+  if (manifest.capability.kind !== "mcp") throw new Error("plan requires an MCP capability");
+  const plan = manifest.plan;
+  console.log(`${manifest.capability.id} — ${manifest.capability.description}`);
+  console.log(`runtime: ${plan.runtime ?? "not declared"}`);
+  console.log(`transport: ${plan.transport ?? "not declared"}`);
+  if (plan.launch) console.log(`launch: ${plan.launch.command} ${(plan.launch.args ?? []).join(" ")}`.trim());
+  console.log(`requirements: ${plan.requirements_declared ? "declared" : "INCOMPLETE"}`);
+  for (const value of plan.detected_dependencies.python) console.log(`  python: ${value}`);
+  for (const value of plan.detected_dependencies.node) console.log(`  node: ${value}`);
+  for (const item of plan.env.filter((item) => item.required)) console.log(`  required env: ${item.name}`);
+  for (const item of plan.unresolved) console.log(`  unresolved: ${item}`);
+}
+
+async function commandAvailable(command) {
+  if (!command || command.includes("/") || command.includes("\\")) return false;
+  const suffixes = process.platform === "win32" ? (process.env.PATHEXT ?? ".EXE;.CMD;.BAT").split(";") : [""];
+  for (const directory of (process.env.PATH ?? "").split(delimiter)) {
+    for (const suffix of suffixes) {
+      try {
+        await access(join(directory, `${command}${suffix}`), constants.X_OK);
+        return true;
+      } catch {}
+    }
+  }
+  return false;
+}
+
+async function doctorReport(manifest) {
+  if (manifest.capability.kind !== "mcp") throw new Error("doctor requires an MCP capability");
+  const { plan } = manifest;
+  const blockers = [...plan.unresolved];
+  const warnings = [];
+  if (plan.runtime) warnings.push(`verify runtime constraint: ${plan.runtime}`);
+  const platform = { darwin: "macos", win32: "windows", linux: "linux" }[process.platform] ?? process.platform;
+  const platforms = plan.requirements.platforms ?? [];
+  if (platforms.length && !platforms.includes("any") && !platforms.includes(platform)) {
+    blockers.push(`requires platform ${platforms.join(" or ")}; current platform is ${platform}`);
+  }
+  const commands = new Set([plan.launch?.command]);
+  for (const item of plan.requirements.commands ?? []) {
+    commands.add(typeof item === "string" ? item : item.name);
+    if (typeof item === "object" && item.version) warnings.push(`verify ${item.name} version ${item.version}`);
+  }
+  for (const command of commands) {
+    if (command && !(await commandAvailable(command))) blockers.push(`command not found on PATH: ${command}`);
+  }
+  for (const item of plan.env.filter((item) => item.required)) {
+    if (!process.env[item.name]) blockers.push(`required environment variable is unset: ${item.name}`);
+  }
+  for (const item of plan.requirements.software ?? []) {
+    warnings.push(`verify external software: ${typeof item === "string" ? item : item.name}`);
+  }
+  for (const item of plan.requirements.setup ?? []) warnings.push(`manual setup: ${item}`);
+  return { blockers, warnings };
+}
+
+function printDoctor(report) {
+  for (const item of report.blockers) console.log(`BLOCKED: ${item}`);
+  for (const item of report.warnings) console.log(`CHECK: ${item}`);
+  if (!report.blockers.length) console.log("doctor: ready");
+}
+
+async function plan(options) {
+  printPlan(await getCapability(options));
+}
+
+async function doctor(options) {
+  const manifest = await getCapability(options);
+  const report = await doctorReport(manifest);
+  printDoctor(report);
+  if (report.blockers.length) throw new Error("MCP server is not ready on this host");
+}
+
+async function fetchMcp(options) {
+  const manifest = await getCapability(options);
+  if (manifest.capability.kind !== "mcp") throw new Error("fetch requires an MCP capability");
+  printPlan(manifest);
+  await downloadPackage(options, manifest);
+}
+
+async function configure(options) {
+  const manifest = await getCapability(options);
+  if (manifest.capability.kind !== "mcp") throw new Error("configure requires an MCP capability");
+  const { destination } = installLocation(options, manifest);
+  try { await stat(destination); } catch { throw new Error(`package is not fetched: ${destination}`); }
+  const launch = manifest.plan.launch;
+  if (!launch) throw new Error("server has no launch configuration");
+  const cwd = resolve(destination, launch.cwd ?? ".");
+  if ((options.client ?? "json") === "codex") {
+    console.log(`[mcp_servers.${JSON.stringify(manifest.capability.name)}]`);
+    console.log(`command = ${JSON.stringify(launch.command)}`);
+    console.log(`args = ${JSON.stringify(launch.args ?? [])}`);
+    console.log(`cwd = ${JSON.stringify(cwd)}`);
+    return;
+  }
+  if ((options.client ?? "json") !== "json") throw new Error("client must be codex or json");
+  console.log(JSON.stringify({ mcpServers: { [manifest.capability.name]: { ...launch, cwd } } }, null, 2));
+}
+
+async function add(options) {
+  const manifest = await getCapability(options);
+  if (manifest.capability.kind === "mcp") {
+    printPlan(manifest);
+    const report = await doctorReport(manifest);
+    printDoctor(report);
+    if (report.blockers.length) throw new Error("refusing automatic MCP activation; use fetch after reviewing the plan");
+  }
+  await downloadPackage(options, manifest);
 }
 
 export async function main(argv = process.argv.slice(2)) {
@@ -170,6 +312,10 @@ export async function main(argv = process.argv.slice(2)) {
   if (command === "taps") return taps(options);
   if (command === "search") return search(options);
   if (command === "info") return info(options);
+  if (command === "plan") return plan(options);
+  if (command === "doctor") return doctor(options);
+  if (command === "fetch") return fetchMcp(options);
+  if (command === "configure") return configure(options);
   if (command === "add") return add(options);
   throw new Error(`unknown command: ${command}\n\n${usage()}`);
 }

@@ -53,7 +53,13 @@ test("add downloads, verifies, and records a project skill", async () => {
     ["bin/sample", Buffer.from("#!/bin/sh\nprintf sample\\n")],
   ]);
   const manifest = {
-    capability: { id: "public:skill:fixture~development~sample", name: "sample" },
+    capability: {
+      id: "public:skill:fixture~development~sample",
+      tap: "public",
+      kind: "skill",
+      locator: "fixture~development~sample",
+      name: "sample",
+    },
     files: [...files].map(([path, bytes]) => ({
       path,
       size: bytes.length,
@@ -70,7 +76,7 @@ test("add downloads, verifies, and records a project skill", async () => {
         headers: { "content-type": "application/json" },
       });
     }
-    const prefix = "/api/v1/skills/public/fixture~development~sample/files/";
+    const prefix = "/api/v1/packages/public/skill/fixture~development~sample/files/";
     const path = decodeURIComponent(url.pathname.slice(prefix.length));
     if (url.pathname.startsWith(prefix) && files.has(path)) {
       return new Response(files.get(path), { status: 200 });
@@ -101,5 +107,110 @@ test("add downloads, verifies, and records a project skill", async () => {
     console.log = original;
     globalThis.fetch = originalFetch;
     await rm(project, { recursive: true, force: true });
+  }
+});
+
+test("MCP add requires a complete plan, passes doctor, and fetches the package", async () => {
+  const id = "public:mcp:fixture~sample";
+  const files = new Map([
+    ["server.mjs", Buffer.from("console.log('server');\n")],
+    ["server.json", Buffer.from('{"name":"sample"}\n')],
+  ]);
+  const platform = { darwin: "macos", win32: "windows", linux: "linux" }[process.platform] ?? process.platform;
+  const manifest = {
+    capability: {
+      id,
+      tap: "public",
+      kind: "mcp",
+      locator: "fixture~sample",
+      name: "sample",
+      description: "Sample MCP server.",
+    },
+    files: [...files].map(([path, bytes]) => ({
+      path,
+      size: bytes.length,
+      hash: `sha256:${createHash("sha256").update(bytes).digest("hex")}`,
+      executable: false,
+    })),
+    plan: {
+      runtime: "node>=20",
+      transport: "stdio",
+      launch: { command: "node", args: ["server.mjs"], cwd: "." },
+      auth: "none",
+      env: [],
+      requirements_declared: true,
+      requirements: { platforms: [platform], commands: ["node"] },
+      detected_dependencies: { python: [], node: [], files: ["server.json"] },
+      unresolved: [],
+    },
+  };
+  const originalFetch = globalThis.fetch;
+  const originalLog = console.log;
+  const output = [];
+  globalThis.fetch = async (input) => {
+    const url = new URL(input);
+    if (url.pathname === "/api/v1/capabilities/public/mcp/fixture~sample") {
+      return new Response(JSON.stringify(manifest), { status: 200, headers: { "content-type": "application/json" } });
+    }
+    const prefix = "/api/v1/packages/public/mcp/fixture~sample/files/";
+    const path = decodeURIComponent(url.pathname.slice(prefix.length));
+    return url.pathname.startsWith(prefix) && files.has(path)
+      ? new Response(files.get(path), { status: 200 })
+      : new Response("not found", { status: 404 });
+  };
+  console.log = (value) => output.push(value);
+  const project = await mkdtemp(join(tmpdir(), "taproom-mcp-test-"));
+  try {
+    await main(["add", id, "--project", project, "--server", "http://taproom.test"]);
+    assert.equal(
+      await readFile(join(project, ".taproom", "mcp", "public", "sample", "server.mjs"), "utf8"),
+      files.get("server.mjs").toString(),
+    );
+    const lock = JSON.parse(await readFile(join(project, ".taproom.lock"), "utf8"));
+    assert.equal(lock.mcp_servers[id].files.length, 2);
+    assert.match(output.join("\n"), /doctor: ready/);
+    output.length = 0;
+    await main(["configure", id, "--project", project, "--client", "codex", "--server", "http://taproom.test"]);
+    assert.match(output.join("\n"), /\[mcp_servers\."sample"\]/);
+  } finally {
+    globalThis.fetch = originalFetch;
+    console.log = originalLog;
+    await rm(project, { recursive: true, force: true });
+  }
+});
+
+test("MCP add refuses an incomplete requirements declaration", async () => {
+  const originalFetch = globalThis.fetch;
+  const originalLog = console.log;
+  globalThis.fetch = async () => new Response(JSON.stringify({
+    capability: {
+      id: "public:mcp:fixture~unsafe",
+      tap: "public",
+      kind: "mcp",
+      locator: "fixture~unsafe",
+      name: "unsafe",
+      description: "Incomplete MCP server.",
+    },
+    files: [],
+    plan: {
+      runtime: "python>=3.11",
+      transport: "stdio",
+      launch: { command: "uv", args: ["run", "server.py"], cwd: "." },
+      env: [],
+      requirements_declared: false,
+      requirements: {},
+      detected_dependencies: { python: [], node: [], files: ["README.md"] },
+      unresolved: ["server.json has no structured requirements"],
+    },
+  }), { status: 200, headers: { "content-type": "application/json" } });
+  console.log = () => {};
+  try {
+    await assert.rejects(
+      main(["add", "public:mcp:fixture~unsafe", "--project", ".", "--server", "http://taproom.test"]),
+      /refusing automatic MCP activation/,
+    );
+  } finally {
+    globalThis.fetch = originalFetch;
+    console.log = originalLog;
   }
 });

@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import hashlib
 import json
 import os
 import re
@@ -201,21 +200,3 @@ def load_mcp_servers(sources: Iterable[tuple[str, str, Path]]) -> list[Capabilit
                 )
             )
     return capabilities
-
-
-def skill_manifest(capability: Capability) -> dict:
-    files = []
-    for path in sorted(capability.path.rglob("*")):
-        if path.is_symlink() or not path.is_file():
-            continue
-        relative = path.relative_to(capability.path).as_posix()
-        digest = hashlib.sha256(path.read_bytes()).hexdigest()
-        files.append(
-            {
-                "path": relative,
-                "size": path.stat().st_size,
-                "hash": f"sha256:{digest}",
-                "executable": os.access(path, os.X_OK),
-            }
-        )
-    return {"capability": capability.to_dict(), "files": files}

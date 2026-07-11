@@ -11,20 +11,16 @@ from starlette.responses import FileResponse, JSONResponse
 
 from .catalog import Catalog
 from .models import Capability, Tap
+from .packages import package_file_allowed, package_manifest
 from .sources import (
     load_capabilities,
     load_taps,
-    skill_manifest,
 )
 
 
 def build_runtime() -> tuple[Catalog, list[Tap]]:
     taps = load_taps()
     return Catalog(load_capabilities(taps)), taps
-
-
-def build_catalog() -> Catalog:
-    return build_runtime()[0]
 
 
 def create_server(catalog: Catalog | None = None, taps: list[Tap] | None = None) -> FastMCP:
@@ -61,13 +57,19 @@ def create_server(catalog: Catalog | None = None, taps: list[Tap] | None = None)
 
     @mcp.tool
     def inspect_capability(capability_id: str) -> dict:
-        """Return metadata and, for skills, a file manifest for one capability."""
+        """Return metadata, package files, and dependency planning for one capability."""
         capability = catalog.get(capability_id)
         if capability is None:
             raise ValueError(f"Unknown capability: {capability_id}")
-        if capability.kind == "skill":
-            return skill_manifest(capability)
-        return capability.to_dict()
+        return package_manifest(capability)
+
+    @mcp.tool
+    def plan_mcp_server(capability_id: str) -> dict:
+        """Return files, dependencies, host requirements, environment, and launch details for an MCP server."""
+        capability = catalog.get(capability_id)
+        if capability is None or capability.kind != "mcp":
+            raise ValueError(f"Unknown MCP capability: {capability_id}")
+        return package_manifest(capability)
 
     @mcp.custom_route("/api/v1/search", methods=["GET"])
     async def api_search(request: Request):
@@ -91,29 +93,38 @@ def create_server(catalog: Catalog | None = None, taps: list[Tap] | None = None)
         capability = _route_capability(catalog, request)
         if capability is None:
             return JSONResponse({"error": "capability not found"}, status_code=404)
-        if capability.kind == "skill":
-            return JSONResponse(skill_manifest(capability))
-        return JSONResponse(capability.to_dict())
+        return JSONResponse(package_manifest(capability))
 
-    @mcp.custom_route("/api/v1/skills/{tap}/{locator}/files/{file_path:path}", methods=["GET"])
-    async def api_skill_file(request: Request):
-        capability = catalog.get(f"{request.path_params['tap']}:skill:{request.path_params['locator']}")
-        if capability is None:
-            return JSONResponse({"error": "skill not found"}, status_code=404)
-        relative = Path(request.path_params["file_path"])
-        if relative.is_absolute() or ".." in relative.parts:
-            return JSONResponse({"error": "invalid path"}, status_code=400)
-        target = (capability.path / relative).resolve()
-        try:
-            target.relative_to(capability.path.resolve())
-        except ValueError:
-            return JSONResponse({"error": "invalid path"}, status_code=400)
-        if not target.is_file():
-            return JSONResponse({"error": "file not found"}, status_code=404)
-        media_type = mimetypes.guess_type(target.name)[0] or "application/octet-stream"
-        return FileResponse(target, media_type=media_type)
+    @mcp.custom_route(
+        "/api/v1/packages/{tap}/{kind}/{locator}/files/{file_path:path}",
+        methods=["GET"],
+    )
+    async def api_package_file(request: Request):
+        parts = request.path_params
+        capability = catalog.get(f"{parts['tap']}:{parts['kind']}:{parts['locator']}")
+        return _file_response(capability, parts["file_path"])
 
     return mcp
+
+
+def _file_response(capability: Capability | None, file_path: str):
+    if capability is None:
+        return JSONResponse({"error": "capability not found"}, status_code=404)
+    relative = Path(file_path)
+    if relative.is_absolute() or ".." in relative.parts:
+        return JSONResponse({"error": "invalid path"}, status_code=400)
+    source = capability.path / relative
+    if not package_file_allowed(capability.path, source):
+        return JSONResponse({"error": "file not found"}, status_code=404)
+    target = source.resolve()
+    try:
+        target.relative_to(capability.path.resolve())
+    except ValueError:
+        return JSONResponse({"error": "invalid path"}, status_code=400)
+    if not target.is_file():
+        return JSONResponse({"error": "file not found"}, status_code=404)
+    media_type = mimetypes.guess_type(target.name)[0] or "application/octet-stream"
+    return FileResponse(target, media_type=media_type)
 
 
 def _route_capability(catalog: Catalog, request: Request) -> Capability | None:
