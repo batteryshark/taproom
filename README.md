@@ -8,7 +8,7 @@ Taproom discovers portable agent capabilities without owning them. It indexes
 skill collections and MCP server registries, exposes skills through standard
 FastMCP resources, and provides a local CLI for explicit installation.
 
-The development defaults discover sibling checkouts of the public SkillTap and
+The development defaults discover sibling checkouts of the public Skill Tap and
 MCP Tap collections. A `taproom.toml` file can register any number of named
 public or private taps, each containing multiple skill and MCP sources. Private
 collections are never loaded implicitly.
@@ -30,7 +30,7 @@ Requires Python 3.11+, `uv`, and FastMCP 3.4.x.
 
 ```sh
 git clone https://github.com/batteryshark/taproom.git
-git clone https://github.com/batteryshark/skills-tap.git skill-tap
+git clone https://github.com/batteryshark/skill-tap.git
 cd taproom
 uv sync
 uv run taproom-server
