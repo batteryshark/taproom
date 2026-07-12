@@ -1,6 +1,6 @@
 # Taproom
 
-![Taproom — a 1950s comic-book robot serving Skill and MCP capability cards](assets/taproom.png)
+![Taproom — a 1950s comic-book robot serving Skill and MCP capability cards](assets/taproom-480.png)
 
 Taproom discovers portable agent capabilities without owning them. It indexes
 skill collections and MCP server registries, exposes skills through standard
